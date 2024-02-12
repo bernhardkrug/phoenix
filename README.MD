@@ -44,3 +44,21 @@ You can use one of the following ConfigFunctions to configure Phoenix:
 ``WithSchema(schemaName string)``: If you are using a schema you can specify it here.  
 ``WithTableName(tableName string)``: Specifies the table name, where Phoenix stores the migration history.
 
+### Example:
+```go
+package main
+
+import (
+	"database/sql"
+	"github.com/bernhardkrug/phoenix"
+)
+
+func main() {
+	var db *sql.DB
+	db = ... // connect to your database
+	
+	// Configures the table name where Phoenix stores the migration history
+	phoenix.Rise(db, phoenix.Postgres, phoenix.WithTableName("migration_history"))
+}
+```
+
