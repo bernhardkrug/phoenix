@@ -43,11 +43,30 @@ func (p *phoenix) migrate() error {
 	return nil
 }
 
+func (p *phoenix) getHistory() ([]*historyEntry, error) {
+	var result []*historyEntry
+	rows, err := p.db.Query("SELECT * FROM " + p.config.TableName() + " ORDER BY version ASC;")
+	if err != nil {
+
+		return result, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var entry historyEntry
+		err = rows.Scan(&entry.installedRank, &entry.version, &entry.description, &entry.migrationType, &entry.script, &entry.checksum, &entry.installedBy, &entry.installedOn, &entry.executionTime, &entry.success)
+		if err != nil {
+			return []*historyEntry{}, err
+		}
+		result = append(result, &entry)
+	}
+	return result, nil
+}
+
 func (p *phoenix) createHistoryTable() error {
 	var err error
 	switch p.dbType {
 	case Postgres:
-		_, err = p.db.Exec("CREATE TABLE " + p.config.TableName() + " (installed_rank INT, version VARCHAR(50), description VARCHAR(200), type VARCHAR(20), script VARCHAR(1000), checksum NUMERIC, installed_by VARCHAR(100), installed_on TIMESTAMP, execution_time NUMERIC, success BOOLEAN);")
+		fallthrough
 	case Mysql:
 		_, err = p.db.Exec("CREATE TABLE " + p.config.TableName() + " (installed_rank INT, version VARCHAR(50), description VARCHAR(200), type VARCHAR(20), script VARCHAR(1000), checksum NUMERIC, installed_by VARCHAR(100), installed_on TIMESTAMP, execution_time NUMERIC, success BOOLEAN);")
 	}
@@ -68,27 +87,41 @@ func (p *phoenix) getImportRecords() ([]*importRecord, error) {
 	return collectedRecords, nil
 }
 
+func (p *phoenix) collectImports(collector *[]*importRecord) func(path string, d fs.DirEntry, err error) error {
+	return func(path string, d fs.DirEntry, err error) error {
+		if d == nil {
+			return errors.New("Import path does not exist")
+		}
+		if d.IsDir() {
+			return nil
+		}
+		re := regexp.MustCompile(`V(\d+)__.+\.sql`)
+		if !re.MatchString(d.Name()) {
+			log.Println("Skipping file", d.Name())
+			return nil
+		}
+		version := re.FindStringSubmatch(d.Name())[1]
+		if len(version) == 0 {
+			return errors.New("File does not version naming convention")
+		}
+
+		fileContent, err := os.ReadFile(path)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		*collector = append(*collector, &importRecord{
+			sqlCommands: removeComments(strings.SplitAfter(string(fileContent), ";")),
+			name:        d.Name(),
+			checksum:    p.checksum(fileContent),
+		})
+		return nil
+	}
+}
+
 func (p *phoenix) checksum(input []byte) uint32 {
 	table := crc32.MakeTable(crc32.IEEE)
 	return crc32.Checksum(input, table)
-}
-
-func (p *phoenix) getHistory() ([]*historyEntry, error) {
-	var result []*historyEntry
-	rows, err := p.db.Query("SELECT * FROM " + p.config.TableName() + " ORDER BY version ASC;")
-	if err != nil {
-		return result, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var entry historyEntry
-		err = rows.Scan(&entry.installedRank, &entry.version, &entry.description, &entry.migrationType, &entry.script, &entry.checksum, &entry.installedBy, &entry.installedOn, &entry.executionTime, &entry.success)
-		if err != nil {
-			return []*historyEntry{}, err
-		}
-		result = append(result, &entry)
-	}
-	return result, nil
 }
 
 func (p *phoenix) executeMigration(history []*historyEntry, records []*importRecord) error {
@@ -155,7 +188,7 @@ func (p *phoenix) importRecord(tx *sql.Tx, record *importRecord) error {
 		record.name,
 		record.checksum,
 		currentUser,
-		time.Now(),
+		time.Now().UTC(),
 		duration.Milliseconds(),
 		true)
 	if err != nil {
@@ -199,38 +232,6 @@ func (p *phoenix) validate(historyEntry *historyEntry, record *importRecord) err
 		return errors.New("Checksum mismatch")
 	}
 	return nil
-}
-
-func (p *phoenix) collectImports(collector *[]*importRecord) func(path string, d fs.DirEntry, err error) error {
-	return func(path string, d fs.DirEntry, err error) error {
-		if d == nil {
-			return errors.New("Import path does not exist")
-		}
-		if d.IsDir() {
-			return nil
-		}
-		re := regexp.MustCompile(`V(\d+)__.+\.sql`)
-		if !re.MatchString(d.Name()) {
-			log.Println("Skipping file", d.Name())
-			return nil
-		}
-		version := re.FindStringSubmatch(d.Name())[1]
-		if len(version) == 0 {
-			return errors.New("File does not version naming convention")
-		}
-
-		fileContent, err := os.ReadFile(path)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		*collector = append(*collector, &importRecord{
-			sqlCommands: removeComments(strings.SplitAfter(string(fileContent), ";")),
-			name:        d.Name(),
-			checksum:    p.checksum(fileContent),
-		})
-		return nil
-	}
 }
 
 func removeComments(commands []string) []string {
