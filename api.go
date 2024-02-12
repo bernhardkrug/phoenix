@@ -51,7 +51,7 @@ func (c *Config) TableName() string {
 	return schema + c.Table
 }
 
-func Rise(db *sql.DB, dbType dbType, configFns ...ConfigFunc) {
+func Rise(db *sql.DB, dbType dbType, configFns ...ConfigFunc) error {
 	config := defaultConfig()
 	for _, fn := range configFns {
 		fn(&config)
@@ -61,7 +61,5 @@ func Rise(db *sql.DB, dbType dbType, configFns ...ConfigFunc) {
 		db:     db,
 		dbType: dbType,
 	}
-	if err := p.migrate(); err != nil {
-		panic(err)
-	}
+	return p.migrate()
 }
