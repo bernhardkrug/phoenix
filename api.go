@@ -31,7 +31,7 @@ func WithSchema(schema string) ConfigFunc {
 
 func defaultConfig() Config {
 	return Config{
-		ImportFolder: "sql",
+		ImportFolder: "phoenix",
 		Table:        "phoenix_history",
 		SchemaName:   "",
 	}
