@@ -22,20 +22,20 @@ type phoenix struct {
 	dbType dbType
 }
 
-func (p *phoenix) migrate() error {
-	history, err := p.getHistory()
+func (phoenix *phoenix) migrate() error {
+	history, err := phoenix.getHistory()
 	if err != nil {
-		if err := p.createHistoryTable(); err != nil {
+		if err := phoenix.createHistoryTable(); err != nil {
 			return err
 		}
 	}
 
-	importRecords, err := p.getImportRecords()
+	importRecords, err := phoenix.getImportRecords()
 	if err != nil {
 		return err
 	}
 
-	err = p.executeMigration(history, importRecords)
+	err = phoenix.executeMigration(history, importRecords)
 	if err != nil {
 		return err
 	}
@@ -43,9 +43,9 @@ func (p *phoenix) migrate() error {
 	return nil
 }
 
-func (p *phoenix) getHistory() ([]*historyEntry, error) {
-	var result []*historyEntry
-	rows, err := p.db.Query("SELECT * FROM " + p.config.TableName() + " ORDER BY version ASC;")
+func (phoenix *phoenix) getHistory() (migrationHistory, error) {
+	var result migrationHistory
+	rows, err := phoenix.db.Query("SELECT * FROM " + phoenix.config.TableName() + " ORDER BY version ASC;")
 	if err != nil {
 
 		return result, err
@@ -55,30 +55,31 @@ func (p *phoenix) getHistory() ([]*historyEntry, error) {
 		var entry historyEntry
 		err = rows.Scan(&entry.installedRank, &entry.version, &entry.description, &entry.migrationType, &entry.script, &entry.checksum, &entry.installedBy, &entry.installedOn, &entry.executionTime, &entry.success)
 		if err != nil {
-			return []*historyEntry{}, err
+			return migrationHistory{}, err
 		}
 		result = append(result, &entry)
 	}
 	return result, nil
 }
 
-func (p *phoenix) createHistoryTable() error {
+func (phoenix *phoenix) createHistoryTable() error {
 	var err error
-	switch p.dbType {
+	switch phoenix.dbType {
 	case Postgres:
 		fallthrough
 	case Mysql:
-		_, err = p.db.Exec("CREATE TABLE " + p.config.TableName() + " (installed_rank INT, version VARCHAR(50), description VARCHAR(200), type VARCHAR(20), script VARCHAR(1000), checksum NUMERIC, installed_by VARCHAR(100), installed_on TIMESTAMP, execution_time NUMERIC, success BOOLEAN);")
+		_, err = phoenix.db.Exec("CREATE TABLE " + phoenix.config.TableName() + " (installed_rank INT, version VARCHAR(50), description VARCHAR(200), type VARCHAR(20), script VARCHAR(1000), checksum NUMERIC, installed_by VARCHAR(100), installed_on TIMESTAMP, execution_time NUMERIC, success BOOLEAN);")
 	}
 	if err != nil {
+		log.Println()
 		return err
 	}
 	return nil
 }
 
-func (p *phoenix) getImportRecords() ([]*importRecord, error) {
+func (phoenix *phoenix) getImportRecords() ([]*importRecord, error) {
 	var collectedRecords []*importRecord
-	if err := filepath.WalkDir(p.config.ImportFolder, p.collectImports(&collectedRecords)); err != nil {
+	if err := filepath.WalkDir(phoenix.config.ImportFolder, phoenix.collectImports(&collectedRecords)); err != nil {
 		return nil, err
 	}
 	sort.Slice(collectedRecords, func(p, j int) bool {
@@ -87,7 +88,7 @@ func (p *phoenix) getImportRecords() ([]*importRecord, error) {
 	return collectedRecords, nil
 }
 
-func (p *phoenix) collectImports(collector *[]*importRecord) func(path string, d fs.DirEntry, err error) error {
+func (phoenix *phoenix) collectImports(collector *[]*importRecord) func(path string, d fs.DirEntry, err error) error {
 	return func(path string, d fs.DirEntry, err error) error {
 		if d == nil {
 			return errors.New("Import path does not exist")
@@ -113,28 +114,28 @@ func (p *phoenix) collectImports(collector *[]*importRecord) func(path string, d
 		*collector = append(*collector, &importRecord{
 			sqlCommands: removeComments(strings.SplitAfter(string(fileContent), ";")),
 			name:        d.Name(),
-			checksum:    p.checksum(fileContent),
+			checksum:    phoenix.checksum(fileContent),
 		})
 		return nil
 	}
 }
 
-func (p *phoenix) checksum(input []byte) uint32 {
+func (phoenix *phoenix) checksum(input []byte) uint32 {
 	table := crc32.MakeTable(crc32.IEEE)
 	return crc32.Checksum(input, table)
 }
 
-func (p *phoenix) executeMigration(history []*historyEntry, records []*importRecord) error {
+func (phoenix *phoenix) executeMigration(history migrationHistory, records []*importRecord) error {
 	maxVersion := -1
 
 	var err error
-	tx, err := p.db.Begin()
+	tx, err := phoenix.db.Begin()
 	if err != nil {
 		return err
 	}
 	for index, record := range records {
 		if index < len(history) {
-			maxVersion, err = p.validateHistoryEntry(history[index], record)
+			maxVersion, err = phoenix.validateHistoryEntry(history[index], record)
 			if err != nil {
 				return err
 			}
@@ -146,7 +147,7 @@ func (p *phoenix) executeMigration(history []*historyEntry, records []*importRec
 			if currentVersion <= maxVersion {
 				return errors.New("version conflict")
 			}
-			err = p.importRecord(tx, record)
+			err = phoenix.importRecord(tx, record)
 			if err != nil {
 				rollbackErr := tx.Rollback()
 				if rollbackErr != nil {
@@ -163,7 +164,7 @@ func (p *phoenix) executeMigration(history []*historyEntry, records []*importRec
 	}
 	return nil
 }
-func (p *phoenix) importRecord(tx *sql.Tx, record *importRecord) error {
+func (phoenix *phoenix) importRecord(tx *sql.Tx, record *importRecord) error {
 	startTime := time.Now()
 	for _, command := range record.sqlCommands {
 		_, err := tx.Exec(command)
@@ -176,11 +177,11 @@ func (p *phoenix) importRecord(tx *sql.Tx, record *importRecord) error {
 	if err != nil {
 		return err
 	}
-	currentUser, err := p.getCurrentUser()
+	currentUser, err := phoenix.getCurrentUser()
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec("INSERT INTO "+p.config.TableName()+" (installed_rank, version, description, type, script, checksum, installed_by, installed_on, execution_time, success) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);",
+	_, err = tx.Exec("INSERT INTO "+phoenix.config.TableName()+" (installed_rank, version, description, type, script, checksum, installed_by, installed_on, execution_time, success) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);",
 		rank,
 		record.getVersion(),
 		record.getDescription(),
@@ -197,14 +198,14 @@ func (p *phoenix) importRecord(tx *sql.Tx, record *importRecord) error {
 	return nil
 }
 
-func (p *phoenix) getCurrentUser() (string, error) {
+func (phoenix *phoenix) getCurrentUser() (string, error) {
 	currentUser := new(string)
 	var err error
-	switch p.dbType {
+	switch phoenix.dbType {
 	case Postgres:
-		err = p.db.QueryRow("SELECT current_user;").Scan(currentUser)
+		err = phoenix.db.QueryRow("SELECT current_user;").Scan(currentUser)
 	case Mysql:
-		err = p.db.QueryRow("SELECT CURRENT_USER();").Scan(currentUser)
+		err = phoenix.db.QueryRow("SELECT CURRENT_USER();").Scan(currentUser)
 	}
 	if err != nil {
 		return "", err
@@ -213,8 +214,8 @@ func (p *phoenix) getCurrentUser() (string, error) {
 	return *currentUser, nil
 }
 
-func (p *phoenix) validateHistoryEntry(entry *historyEntry, record *importRecord) (int, error) {
-	if err := p.validate(entry, record); err != nil {
+func (phoenix *phoenix) validateHistoryEntry(entry *historyEntry, record *importRecord) (int, error) {
+	if err := phoenix.validate(entry, record); err != nil {
 		return 0, err
 	}
 	maxVersion, err := strconv.Atoi(entry.version)
@@ -224,7 +225,7 @@ func (p *phoenix) validateHistoryEntry(entry *historyEntry, record *importRecord
 	return maxVersion, nil
 }
 
-func (p *phoenix) validate(historyEntry *historyEntry, record *importRecord) error {
+func (phoenix *phoenix) validate(historyEntry *historyEntry, record *importRecord) error {
 	if historyEntry.version != record.getVersion() {
 		return errors.New("Version mismatch")
 	}

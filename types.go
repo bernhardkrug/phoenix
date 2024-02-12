@@ -20,6 +20,8 @@ type historyEntry struct {
 	success       bool
 }
 
+type migrationHistory []*historyEntry
+
 type importRecord struct {
 	sqlCommands []string
 	name        string
